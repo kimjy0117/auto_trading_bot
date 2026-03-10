@@ -63,128 +63,125 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up SSH key
+      # sshpass 설치 + known_hosts 등록 (비밀번호 방식 SSH)
+      # GitHub Secrets 필요:
+      #   SERVER_HOST     : 홈서버 IP 또는 도메인
+      #   SERVER_USER     : SSH 로그인 유저명
+      #   SERVER_PASSWORD : SSH 로그인 비밀번호
+      - name: Set up SSH (password)
         run: |
+          sudo apt-get install -y sshpass
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
 
       # 코드를 홈서버로 전송 (git pull 방식)
       - name: Sync code to server
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
-            set -e
-            
-            if [ ! -d '${{ env.DEPLOY_DIR }}' ]; then
-              echo '== 최초 배포: 디렉터리 생성 =='
-              mkdir -p ${{ env.DEPLOY_DIR }}
-              cd ${{ env.DEPLOY_DIR }}
-              git clone ${{ github.server_url }}/${{ github.repository }} .
-            else
-              echo '== 코드 업데이트 =='
-              cd ${{ env.DEPLOY_DIR }}
-              git fetch origin
-              git reset --hard origin/main
-            fi
-          "
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              set -e
+              if [ ! -d '${{ env.DEPLOY_DIR }}' ]; then
+                echo '== 최초 배포: 디렉터리 생성 =='
+                mkdir -p ${{ env.DEPLOY_DIR }}
+                cd ${{ env.DEPLOY_DIR }}
+                git clone ${{ github.server_url }}/${{ github.repository }} .
+              else
+                echo '== 코드 업데이트 =='
+                cd ${{ env.DEPLOY_DIR }}
+                git fetch origin
+                git reset --hard origin/main
+              fi
+            "
 
-      # GitHub Secrets에서 .env 파일 내용을 받아 홈서버에 파일로 생성
-      # GitHub Secrets 등록 방법:
-      #   Settings → Secrets and variables → Actions → New repository secret
-      #   - ENV_FILE      : .env 파일 전체 내용 (API 키 등 공통 시크릿)
-      #   - ENV_PROD_FILE : .env.prod 파일 전체 내용 (운영 DB 비밀번호 등)
+      # GitHub Secrets에서 .env 파일 내용을 홈서버에 파일로 생성
+      # GitHub Secrets 등록:
+      #   ENV_FILE      : .env 파일 전체 내용
+      #   ENV_PROD_FILE : .env.prod 파일 전체 내용
       - name: Write env files to server
         run: |
-          # .env 파일 생성 (줄바꿈 보존을 위해 printf 사용)
           printf '%s' "${{ secrets.ENV_FILE }}" | \
+            sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
             ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "cat > ${{ env.DEPLOY_DIR }}/.env && chmod 600 ${{ env.DEPLOY_DIR }}/.env"
-          
-          # .env.prod 파일 생성
+
           printf '%s' "${{ secrets.ENV_PROD_FILE }}" | \
+            sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
             ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "cat > ${{ env.DEPLOY_DIR }}/.env.prod && chmod 600 ${{ env.DEPLOY_DIR }}/.env.prod"
-          
+
           echo '== .env 파일 배포 완료 =='
 
-      # 기존 컨테이너 상태 백업 (롤백용)
+      # 기존 컨테이너 이미지 백업 (롤백용)
       - name: Backup current container state
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
-            cd ${{ env.DEPLOY_DIR }}
-            if docker ps -q --filter name=autotrading-backend | grep -q .; then
-              docker tag autotrading-backend:latest autotrading-backend:rollback 2>/dev/null || true
-              docker tag autotrading-frontend:latest autotrading-frontend:rollback 2>/dev/null || true
-              echo '== 롤백 이미지 저장 완료 =='
-            fi
-          "
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_DIR }}
+              if docker ps -q --filter name=autotrading-backend | grep -q .; then
+                docker tag autotrading-backend:latest autotrading-backend:rollback 2>/dev/null || true
+                docker tag autotrading-frontend:latest autotrading-frontend:rollback 2>/dev/null || true
+                echo '== 롤백 이미지 저장 완료 =='
+              fi
+            "
 
       # Docker 이미지 빌드 및 서비스 재시작
       - name: Build and restart services
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
-            set -e
-            cd ${{ env.DEPLOY_DIR }}
-            
-            echo '== Docker 이미지 빌드 시작 =='
-            docker compose build --no-cache --parallel
-            
-            echo '== 서비스 재시작 (무중단) =='
-            docker compose up -d --remove-orphans
-            
-            echo '== 미사용 이미지 정리 =='
-            docker image prune -f
-          "
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              set -e
+              cd ${{ env.DEPLOY_DIR }}
+              echo '== Docker 이미지 빌드 시작 =='
+              docker compose build --no-cache --parallel
+              echo '== 서비스 재시작 =='
+              docker compose up -d --remove-orphans
+              echo '== 미사용 이미지 정리 =='
+              docker image prune -f
+            "
 
       # 배포 결과 헬스체크
       - name: Health check
         run: |
           echo '== 헬스체크 대기 중 (60초) =='
           sleep 60
-          
-          # 백엔드 헬스체크
-          BACKEND_STATUS=$(ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+
+          BACKEND_STATUS=$(sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "curl -sf http://localhost:8000/api/health | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d['status'])\" 2>/dev/null || echo 'error'")
-          
-          # 프론트엔드 헬스체크
-          FRONTEND_STATUS=$(ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+
+          FRONTEND_STATUS=$(sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
             "curl -sf http://localhost/health 2>/dev/null || echo 'error'")
-          
+
           echo "백엔드 상태: $BACKEND_STATUS"
           echo "프론트엔드 상태: $FRONTEND_STATUS"
-          
+
           if [ "$BACKEND_STATUS" != "ok" ] && [ "$BACKEND_STATUS" != "degraded" ]; then
             echo '❌ 백엔드 헬스체크 실패 — 롤백 시작'
             exit 1
           fi
-          
+
           if [ "$FRONTEND_STATUS" != "OK" ]; then
             echo '❌ 프론트엔드 헬스체크 실패 — 롤백 시작'
             exit 1
           fi
-          
+
           echo '✅ 배포 성공!'
 
       # 헬스체크 실패 시 자동 롤백
       - name: Rollback on failure
         if: failure()
         run: |
-          ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
-            cd ${{ env.DEPLOY_DIR }}
-            
-            echo '== 롤백 시작 =='
-            
-            # 이전 이미지로 복원
-            docker tag autotrading-backend:rollback autotrading-backend:latest 2>/dev/null || true
-            docker tag autotrading-frontend:rollback autotrading-frontend:latest 2>/dev/null || true
-            
-            # 이전 코드로 복원
-            git stash 2>/dev/null || true
-            
-            docker compose up -d
-            echo '== 롤백 완료 =='
-          "
+          sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
+            ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+              cd ${{ env.DEPLOY_DIR }}
+              echo '== 롤백 시작 =='
+              docker tag autotrading-backend:rollback autotrading-backend:latest 2>/dev/null || true
+              docker tag autotrading-frontend:rollback autotrading-frontend:latest 2>/dev/null || true
+              git stash 2>/dev/null || true
+              docker compose up -d
+              echo '== 롤백 완료 =='
+            "
 
       # Telegram 배포 결과 알림
       - name: Notify deployment result
@@ -195,7 +192,7 @@ jobs:
           else
             MESSAGE="❌ <b>배포 실패</b>%0A브랜치: ${{ github.ref_name }}%0A커밋: ${{ github.event.head_commit.message }}%0A자동 롤백이 시도되었습니다."
           fi
-          
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
             -d "text=${MESSAGE}" \
