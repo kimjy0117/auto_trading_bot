@@ -21,7 +21,6 @@ telethon>=1.37.0
 python-telegram-bot>=21.7
 
 # Finance / Technical Analysis
-TA-Lib>=0.4.32
 numpy>=1.26.0
 pandas>=2.2.0
 
