@@ -80,11 +80,12 @@ jobs:
           sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
             ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
               set -e
-              if [ ! -d '${{ env.DEPLOY_DIR }}' ]; then
-                echo '== 최초 배포: 디렉터리 생성 =='
+              if [ ! -d '${{ env.DEPLOY_DIR }}/.git' ]; then
+                echo '== 최초 배포: 디렉터리 초기화 후 clone =='
+                rm -rf ${{ env.DEPLOY_DIR }}
                 mkdir -p ${{ env.DEPLOY_DIR }}
                 cd ${{ env.DEPLOY_DIR }}
-                git clone ${{ github.server_url }}/${{ github.repository }} .
+                git clone https://$GH_TOKEN@github.com/${{ github.repository }} .
               else
                 echo '== 코드 업데이트 =='
                 cd ${{ env.DEPLOY_DIR }}
@@ -92,6 +93,8 @@ jobs:
                 git reset --hard origin/main
               fi
             "
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       # GitHub Secrets에서 .env 파일 내용을 홈서버에 파일로 생성
       # GitHub Secrets 등록:
