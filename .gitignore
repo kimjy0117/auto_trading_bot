@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables (시크릿 포함 — git 제외)
+.env
+.env.local
+.env.prod
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.cache/
+
+# Docker
+docker-compose.override.yml
+
+# Database
+*.sql.bak
+
+# Plan files
+*.plan.md
+
+# PM2
+.pm2/
+
+# Telethon 세션 파일 (인증 토큰 포함 — git 제외)
+*.session
+*.session-journal
