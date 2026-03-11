@@ -149,7 +149,7 @@ jobs:
 
           FRONTEND_STATUS=$(sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
             ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
-            "curl -sf http://localhost/health 2>/dev/null | tr -d '[:space:]' || echo 'error'")
+            "curl -sf http://localhost:3000/health 2>/dev/null | tr -d '[:space:]' || echo 'error'")
 
           echo "백엔드 상태: $BACKEND_STATUS"
           echo "프론트엔드 상태: $FRONTEND_STATUS"
