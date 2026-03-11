@@ -80,17 +80,25 @@ jobs:
           sshpass -p "${{ secrets.SERVER_PASSWORD }}" \
             ssh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
               set -e
-              if [ ! -d '${{ env.DEPLOY_DIR }}/.git' ]; then
-                echo '== 최초 배포: 디렉터리 초기화 후 clone =='
-                rm -rf ${{ env.DEPLOY_DIR }}
-                mkdir -p ${{ env.DEPLOY_DIR }}
-                cd ${{ env.DEPLOY_DIR }}
-                git clone https://$GH_TOKEN@github.com/${{ github.repository }} .
-              else
+              if [ -d '${{ env.DEPLOY_DIR }}/.git' ]; then
                 echo '== 코드 업데이트 =='
                 cd ${{ env.DEPLOY_DIR }}
                 git fetch origin
                 git reset --hard origin/main
+
+              elif [ -d '${{ env.DEPLOY_DIR }}' ]; then
+                echo '== 디렉터리 존재하나 git 아님 — git init 후 fetch =='
+                cd ${{ env.DEPLOY_DIR }}
+                git init
+                git remote add origin https://$GH_TOKEN@github.com/${{ github.repository }}
+                git fetch origin
+                git reset --hard origin/main
+
+              else
+                echo '== 최초 배포: 디렉터리 생성 후 clone =='
+                mkdir -p ${{ env.DEPLOY_DIR }}
+                cd ${{ env.DEPLOY_DIR }}
+                git clone https://$GH_TOKEN@github.com/${{ github.repository }} .
               fi
             "
         env:
