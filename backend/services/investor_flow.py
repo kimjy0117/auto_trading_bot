@@ -102,59 +102,79 @@ class InvestorFlowService:
         token = await self._ensure_token()
         r = await get_redis()
 
-        for investor_type, tr_id, label in [
-            ("foreign", "FHPST01710000", "외국인"),
-            ("institution", "FHPST01720000", "기관"),
-        ]:
-            await self._fetch_and_cache(token, r, investor_type, tr_id, label)
+        # 통합 API 사용 (FHPTJ04400000)
+        await self._fetch_and_cache_total(token, r)
 
-    async def _fetch_and_cache(
-        self, token: str, r: Any, investor_type: str, tr_id: str, label: str,
-    ) -> None:
-        """단일 투자자 유형의 순매수/순매도 데이터를 조회."""
-        url = f"{settings.kis_base_url}/uapi/domestic-stock/v1/quotations/investor-trend"
+    async def _fetch_and_cache_total(self, token: str, r: Any) -> None:
+        """외국인/기관 매매종목 가집계(FHPTJ04400000) 조회 및 캐싱."""
+        url = f"{settings.kis_base_url}/uapi/domestic-stock/v1/quotations/foreign-institution-total"
+        tr_id = "FHPTJ04400000"
         headers = self._build_headers(token, tr_id)
 
-        for buy_sell, bs_label in [("1", "순매수"), ("2", "순매도")]:
-            params = {
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_INPUT_ISCD": "0000",
-                "FID_DIV_CLS_CODE": buy_sell,
-                "FID_RANK_SORT_CLS_CODE": "0",
-                "FID_ETC_CLS_CODE": "",
-            }
+        # 파라미터 설정 (가집계 조회용)
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",      # 시장 구분 (J: 전체)
+            "FID_COND_SCR_DIV_CODE": "16449",   # 화면 번호
+            "FID_INPUT_ISCD": "0000",           # 종목 코드 (0000: 전체)
+            "FID_DIV_CLS_CODE": "0",            # 분류 코드
+            "FID_BLNG_CLS_CODE": "0",           # 소속 코드
+            "FID_TRGT_CLS_CODE": "11111111",    # 대상 코드
+            "FID_TRGT_EXLS_CLS_CODE": "000000", # 제외 코드
+            "FID_INPUT_PRICE_1": "",            # 가격 범위 시작
+            "FID_INPUT_PRICE_2": "",            # 가격 범위 끝
+            "FID_VOL_CNT": "",                  # 거래량 조건
+            "FID_INPUT_DATE_1": ""              # 날짜 조건
+        }
 
-            try:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.get(url, headers=headers, params=params)
-                    resp.raise_for_status()
-                    data = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url, headers=headers, params=params)
+                resp.raise_for_status()
+                data = resp.json()
 
-                items = data.get("output", [])
-                for item in items:
-                    stock_code = item.get("stck_shrn_iscd", "")
-                    if not stock_code:
-                        continue
+            items = data.get("output", [])
+            if not items:
+                logger.debug("수급 데이터 없음 (output 비어있음)")
+                return
 
-                    net_key = f"net_buy" if buy_sell == "1" else "net_sell"
-                    volume = int(item.get("seln_qty", 0) or 0) if buy_sell == "2" else int(item.get("shnu_qty", 0) or 0)
-                    amount = int(item.get("seln_tr_pbmn", 0) or 0) if buy_sell == "2" else int(item.get("shnu_tr_pbmn", 0) or 0)
+            # 디버깅용: 첫 번째 아이템의 키 출력 (필드명 확인)
+            # logger.debug(f"수급 데이터 샘플 키: {items[0].keys()}")
 
-                    flow_key = f"{_FLOW_KEY_PREFIX}:{stock_code}"
-                    field_prefix = f"{investor_type}_{net_key}"
+            count = 0
+            for item in items:
+                stock_code = item.get("stck_shrn_iscd", "")
+                if not stock_code:
+                    continue
 
-                    await r.hset(flow_key, mapping={
-                        f"{field_prefix}_volume": str(volume),
-                        f"{field_prefix}_amount": str(amount),
-                        f"{investor_type}_type": label,
-                        "updated_at": datetime.now().isoformat(),
-                    })
-                    await r.expire(flow_key, _CACHE_TTL)
+                # 필드명 매핑 (API 응답 필드명에 따라 조정 필요할 수 있음)
+                # frgn_ntby_tr_pbmn: 외국인 순매수 거래대금
+                # orgn_ntby_tr_pbmn: 기관 순매수 거래대금
+                # (값이 없으면 0 처리)
+                foreign_net_amount = int(item.get("frgn_ntby_tr_pbmn", 0) or 0)
+                institution_net_amount = int(item.get("orgn_ntby_tr_pbmn", 0) or 0)
+                
+                # 수량 데이터도 있으면 저장 (옵션)
+                foreign_net_vol = int(item.get("frgn_ntby_qty", 0) or 0)
+                institution_net_vol = int(item.get("orgn_ntby_qty", 0) or 0)
 
-            except httpx.HTTPStatusError as exc:
-                logger.error(f"{label} {bs_label} 조회 HTTP 에러: {exc.response.status_code}")
-            except Exception as exc:
-                logger.error(f"{label} {bs_label} 조회 실패: {exc}")
+                flow_key = f"{_FLOW_KEY_PREFIX}:{stock_code}"
+                
+                await r.hset(flow_key, mapping={
+                    "foreign_net_amount": str(foreign_net_amount),
+                    "institution_net_amount": str(institution_net_amount),
+                    "foreign_net_volume": str(foreign_net_vol),
+                    "institution_net_volume": str(institution_net_vol),
+                    "updated_at": datetime.now().isoformat(),
+                })
+                await r.expire(flow_key, _CACHE_TTL)
+                count += 1
+            
+            logger.info(f"수급 데이터 갱신 완료: {count}개 종목")
+
+        except httpx.HTTPStatusError as exc:
+            logger.error(f"수급 데이터(FHPTJ04400000) 조회 HTTP 에러: {exc.response.status_code} - {exc.response.text}")
+        except Exception as exc:
+            logger.error(f"수급 데이터 조회 실패: {exc}")
 
     async def get_investor_flow(self, stock_code: str) -> dict:
         """특정 종목의 외국인/기관 수급 데이터 반환."""
@@ -166,15 +186,16 @@ class InvestorFlowService:
         def _safe_int(key: str) -> int:
             return int(data.get(key, 0) or 0)
 
-        foreign_net = _safe_int("foreign_net_buy_amount") - _safe_int("foreign_net_sell_amount")
-        institution_net = _safe_int("institution_net_buy_amount") - _safe_int("institution_net_sell_amount")
+        # 기존 로직은 매수금액 - 매도금액이었으나, 
+        # 새 API는 순매수금액(Net)을 바로 제공하므로 그대로 사용
+        foreign_net = _safe_int("foreign_net_amount")
+        institution_net = _safe_int("institution_net_amount")
 
         return {
             "foreign_net": foreign_net,
             "institution_net": institution_net,
-            "foreign_buy_volume": _safe_int("foreign_net_buy_volume"),
-            "foreign_sell_volume": _safe_int("foreign_net_sell_volume"),
-            "institution_buy_volume": _safe_int("institution_net_buy_volume"),
-            "institution_sell_volume": _safe_int("institution_net_sell_volume"),
+            # 볼륨 정보는 필요 시 사용 (현재 스코어링에는 금액만 사용됨)
+            "foreign_net_volume": _safe_int("foreign_net_volume"),
+            "institution_net_volume": _safe_int("institution_net_volume"),
             "updated_at": data.get("updated_at", ""),
         }

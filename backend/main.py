@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
         await telegram_listener.start()
         await dart_monitor.start()
         await market_data.start()
-        await investor_flow.start()
+        # await investor_flow.start()  # WebSocket(H0STCNI0)으로 대체됨
 
         scheduler.add_job(
             trading_loop,
@@ -149,7 +149,7 @@ async def lifespan(app: FastAPI):
         (telegram_listener, "텔레그램"),
         (dart_monitor, "DART"),
         (market_data, "시세"),
-        (investor_flow, "수급"),
+        # (investor_flow, "수급"),
     ]:
         try:
             await svc.stop()

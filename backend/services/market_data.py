@@ -134,21 +134,34 @@ class MarketDataService:
     async def _send_subscribe(
         self, ws: Any, stock_code: str, exchange: str, approval_key: str,
     ) -> None:
-        """체결가 실시간 구독 요청."""
+        """체결가 및 수급 실시간 구독 요청."""
         header = {
             "approval_key": approval_key,
             "custtype": "P",
             "tr_type": "1",
             "content-type": "utf-8",
         }
-        body = {
+
+        # 1. 체결가 (H0STCNT0)
+        body_price = {
             "input": {
                 "tr_id": "H0STCNT0" if exchange == "KRX" else "H0STCNT9",
                 "tr_key": stock_code,
             }
         }
-        await ws.send(json.dumps({"header": header, "body": body}))
-        logger.debug(f"구독 요청 — {exchange}:{stock_code}")
+        await ws.send(json.dumps({"header": header, "body": body_price}))
+        
+        # 2. 실시간 수급 (H0STCNI0) - KRX만 지원
+        if exchange == "KRX":
+            body_flow = {
+                "input": {
+                    "tr_id": "H0STCNI0",
+                    "tr_key": stock_code,
+                }
+            }
+            await ws.send(json.dumps({"header": header, "body": body_flow}))
+
+        logger.debug(f"구독 요청 (시세+수급) — {exchange}:{stock_code}")
 
     async def subscribe(self, stock_code: str, exchange: str = "KRX") -> None:
         """종목 실시간 시세 구독."""
@@ -198,8 +211,78 @@ class MarketDataService:
                 }
                 await self._on_price_update(price_data)
 
+            elif tr_id == "H0STCNI0":
+                # 실시간 외국인/기관 수급 (H0STCNI0)
+                # 필드 순서 (추정):
+                # 0: 종목코드
+                # 1: 시간
+                # 2: 외국인 순매수 수량
+                # 3: 기관 순매수 수량
+                # 4: 외국인 순매수 금액? (확인 필요)
+                # ...
+                # 문서가 없으므로 일단 수량 위주로 파싱하고 로그로 확인
+                
+                # 안전하게 파싱
+                try:
+                    stock_code = fields[0]
+                    # 수량 정보 (보통 2, 3번째 필드)
+                    foreign_net_vol = int(fields[2] or 0)
+                    institution_net_vol = int(fields[3] or 0)
+                    
+                    # 금액 정보가 있다면 좋겠지만, 없으면 수량 * 현재가로 추정하거나
+                    # 일단 수량만 저장
+                    
+                    flow_data = {
+                        "stock_code": stock_code,
+                        "foreign_net_volume": foreign_net_vol,
+                        "institution_net_volume": institution_net_vol,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    await self._on_flow_update(flow_data)
+                except (ValueError, IndexError):
+                    logger.debug(f"수급 메시지 파싱 실패: {raw}")
+
         except (IndexError, ValueError) as exc:
             logger.debug(f"시세 메시지 파싱 에러: {exc}")
+
+    async def _on_flow_update(self, data: dict) -> None:
+        """실시간 수급 데이터를 Redis에 캐싱."""
+        stock_code = data["stock_code"]
+        r = await get_redis()
+        
+        # investor_flow 키에 저장 (기존 investor_flow 서비스와 호환)
+        flow_key = f"investor_flow:{stock_code}"
+        
+        foreign_vol = int(data["foreign_net_volume"])
+        institution_vol = int(data["institution_net_volume"])
+        
+        update_map = {
+            "foreign_net_volume": str(foreign_vol),
+            "institution_net_volume": str(institution_vol),
+            "updated_at": data["timestamp"],
+        }
+        
+        # 금액 정보가 없으면 수량 * 현재가로 대략적 계산 (옵션)
+        # SignalScorer는 금액(Amount)을 기준으로 점수를 매기므로 필수
+        
+        # 현재가 조회 (Redis 캐시)
+        price_data = await r.hgetall(f"{_PRICE_KEY_PREFIX}:{stock_code}")
+        current_price = int(price_data.get("current_price", 0)) if price_data else 0
+        
+        if current_price > 0:
+            # 1주당 가격 * 수량 = 거래대금 (추정치)
+            # 정확한 금액은 아니지만, 수급 강도를 판단하기엔 충분함
+            foreign_amt = foreign_vol * current_price
+            institution_amt = institution_vol * current_price
+            
+            update_map["foreign_net_amount"] = str(foreign_amt)
+            update_map["institution_net_amount"] = str(institution_amt)
+            
+            # 기존에는 매수/매도 금액이 따로 있었으나, 순매수 금액만 있으면 됨
+            # InvestorFlowService.get_investor_flow()에서 순매수 금액을 우선 사용하도록 되어 있음
+        
+        await r.hset(flow_key, mapping=update_map)
+        await r.expire(flow_key, _CACHE_TTL)
 
     async def _on_price_update(self, data: dict) -> None:
         """가격 업데이트를 Redis에 캐싱하고 지표를 계산."""

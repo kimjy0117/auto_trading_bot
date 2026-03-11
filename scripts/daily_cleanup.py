@@ -161,8 +161,15 @@ def _format_daily_report(summary: DailySummary, unclosed: int) -> str:
 
 async def run_daily_cleanup() -> None:
     """일일 정산 메인 함수. main.py 루프에서 호출되거나 단독 실행 가능."""
-    logger.info("=== 일일 정산 시작 ===")
     today = date.today()
+    done_key = f"cleanup:done:{today.isoformat()}"
+
+    r = await get_redis()
+    if await r.exists(done_key):
+        logger.debug(f"일일 정산 이미 완료 — 건너뜀 ({today})")
+        return
+
+    logger.info("=== 일일 정산 시작 ===")
 
     try:
         unclosed = await _check_unclosed_positions()
@@ -172,6 +179,8 @@ async def run_daily_cleanup() -> None:
         if summary:
             report = _format_daily_report(summary, unclosed)
             await send_daily_report(report)
+
+        await r.set(done_key, "1", ex=60 * 60 * 12)  # 12시간 유지
     except Exception as e:
         logger.error(f"일일 정산 에러: {e}")
         await send_error_alert(f"일일 정산 에러: {e}")
