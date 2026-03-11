@@ -66,7 +66,7 @@ class TelegramListener:
             return
 
         self._client = TelegramClient(
-            "autotrading_listener",
+            "/app/sessions/autotrading_listener",
             settings.telegram_api_id,
             settings.telegram_api_hash,
         )

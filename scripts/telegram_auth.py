@@ -29,7 +29,7 @@ except ImportError:
 
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-SESSION_NAME = "autotrading_listener"
+SESSION_NAME = os.getenv("SESSION_PATH", "autotrading_listener")
 
 
 async def main() -> None:

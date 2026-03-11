@@ -63,6 +63,7 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
+      - ./sessions:/app/sessions
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
