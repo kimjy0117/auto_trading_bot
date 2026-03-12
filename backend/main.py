@@ -120,7 +120,8 @@ async def lifespan(app: FastAPI):
     if not is_trading_day():
         logger.info("비거래일 — 스케줄러 시작하지 않음")
     else:
-        await nxt_manager.refresh_nxt_stocks()
+        if settings.nxt_enabled:
+            await nxt_manager.refresh_nxt_stocks()
         await telegram_listener.start()
         await dart_monitor.start()
         await market_data.start()

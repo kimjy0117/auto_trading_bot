@@ -61,7 +61,10 @@ async def _handle_new_signal(data: dict[str, Any]) -> None:
         )
 
         if news.stock_code:
-            await market_data.subscribe(news.stock_code)
+            try:
+                await market_data.subscribe(news.stock_code)
+            except Exception as ws_exc:
+                logger.warning(f"시세 구독 실패 ({news.stock_code}): {ws_exc}")
 
         if news.escalated and news.stock_code:
             market_ctx = await market_data.get_current_price(news.stock_code)
