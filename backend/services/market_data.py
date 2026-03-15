@@ -45,10 +45,12 @@ class MarketDataService:
         self._approval_key: str | None = None
         self._snapshot_cooldown: dict[str, datetime] = {}
 
-    async def _get_approval_key(self) -> str:
-        """WebSocket 접속용 approval key 발급."""
-        if self._approval_key:
+    async def _get_approval_key(self, force_refresh: bool = False) -> str:
+        """WebSocket 접속용 approval key 발급. 재접속 시 만료 방지를 위해 force_refresh=True 권장."""
+        if self._approval_key and not force_refresh:
             return self._approval_key
+        if force_refresh:
+            self._approval_key = None
 
         url = f"{settings.kis_base_url}/oauth2/Approval"
         body = {
@@ -68,15 +70,13 @@ class MarketDataService:
             return
         self._running = True
 
-        approval_key = await self._get_approval_key()
-
         self._tasks.append(asyncio.create_task(
-            self._ws_loop(settings.kis_ws_url, "KRX", approval_key)
+            self._ws_loop(settings.kis_ws_url, "KRX")
         ))
         if settings.nxt_enabled:
             nxt_ws_url = settings.kis_ws_url.replace("21000", "21002")
             self._tasks.append(asyncio.create_task(
-                self._ws_loop(nxt_ws_url, "NXT", approval_key)
+                self._ws_loop(nxt_ws_url, "NXT")
             ))
 
         self._tasks.append(asyncio.create_task(self._poll_market_index()))
@@ -102,11 +102,18 @@ class MarketDataService:
         self._ws_nxt = None
         logger.info("시세 WebSocket 연결 종료")
 
-    async def _ws_loop(self, ws_url: str, exchange: str, approval_key: str) -> None:
-        """WebSocket 연결 유지 + 자동 재접속."""
+    async def _ws_loop(self, ws_url: str, exchange: str) -> None:
+        """WebSocket 연결 유지 + 자동 재접속. 재접속 시 approval_key 재발급으로 만료 방지."""
         while self._running:
             try:
-                async with websockets.connect(ws_url, ping_interval=30) as ws:
+                # 매 연결(첫 접속·재접속)마다 새 approval_key 사용 — KIS 유휴/만료로 끊김 완화
+                approval_key = await self._get_approval_key(force_refresh=True)
+
+                async with websockets.connect(
+                    ws_url,
+                    ping_interval=20,
+                    ping_timeout=20,
+                ) as ws:
                     if exchange == "KRX":
                         self._ws_krx = ws
                     else:
