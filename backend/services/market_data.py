@@ -127,6 +127,12 @@ class MarketDataService:
                 logger.warning(f"{exchange} WebSocket 연결 끊김 — 5초 후 재접속")
             except Exception as exc:
                 logger.error(f"{exchange} WebSocket 에러: {exc}")
+            finally:
+                # 끊긴 소켓 참조 제거 — trading_loop의 subscribe()가 죽은 ws에 send하지 않도록
+                if exchange == "KRX":
+                    self._ws_krx = None
+                else:
+                    self._ws_nxt = None
 
             if self._running:
                 await asyncio.sleep(5)
@@ -169,8 +175,12 @@ class MarketDataService:
             return
         self._subscriptions[stock_code].add(exchange)
         ws = self._ws_krx if exchange == "KRX" else self._ws_nxt
-        if ws and self._approval_key:
-            await self._send_subscribe(ws, stock_code, exchange, self._approval_key)
+        # 연결이 살아 있을 때만 send (끊긴 소켓에 send 시 no close frame 에러 방지)
+        if ws and getattr(ws, "open", True) and self._approval_key:
+            try:
+                await self._send_subscribe(ws, stock_code, exchange, self._approval_key)
+            except Exception as exc:
+                logger.warning(f"시세 구독 요청 실패 ({exchange}:{stock_code}) — 재접속 시 자동 재구독: {exc}")
         await self._cache_market_cap(stock_code)
 
     async def unsubscribe(self, stock_code: str) -> None:

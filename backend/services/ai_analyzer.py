@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -13,6 +14,21 @@ from backend.utils.logger import logger
 
 settings = get_settings()
 _openai = AsyncOpenAI(api_key=settings.openai_api_key)
+
+# API 요청 시 JSON 직렬화를 깨뜨리는 제어문자 제거 (OpenAI 400 invalid JSON 방지)
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _sanitize_for_api(text: str | bytes, max_length: int = 30000) -> str:
+    """OpenAI API 요청용으로 텍스트 정규화. 제어문자 제거, UTF-8 보정."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    s = str(text)
+    s = _CONTROL_CHARS.sub(" ", s)
+    s = s.encode("utf-8", errors="replace").decode("utf-8")
+    if len(s) > max_length:
+        s = s[:max_length] + "..."
+    return s.strip()
 
 
 class AIAnalyzer:
@@ -30,7 +46,8 @@ class AIAnalyzer:
         source: str,
         channel: str | None = None,
     ) -> NewsAnalysis:
-        prompt = self._build_tier1_prompt(raw_text, source)
+        raw_text = _sanitize_for_api(raw_text)
+        prompt = self._build_tier1_prompt(raw_text, _sanitize_for_api(source))
 
         response = await _openai.chat.completions.create(
             model="gpt-4o-mini",
@@ -163,7 +180,7 @@ class AIAnalyzer:
         news: NewsAnalysis,
         context: dict[str, Any],
     ) -> dict[str, str]:
-        ctx_str = json.dumps(context, ensure_ascii=False, default=str)
+        ctx_str = _sanitize_for_api(json.dumps(context, ensure_ascii=False, default=str))
         system = (
             "너는 한국 주식시장 퀀트 애널리스트야. "
             "Tier1 분석 결과와 시장 컨텍스트를 종합하여 매매 판단을 내려.\n\n"
@@ -182,14 +199,15 @@ class AIAnalyzer:
             "- 뉴스 임팩트 지속 시간 현실적 추정\n"
             "- HOLD는 확신이 부족할 때, SELL/STRONG_SELL은 악재일 때"
         )
+        summary = _sanitize_for_api(news.tier1_summary or "")
         user = (
-            f"종목: {news.stock_name} ({news.stock_code})\n"
-            f"Tier1 요약: {news.tier1_summary}\n"
+            f"종목: {news.stock_name or ''} ({news.stock_code or ''})\n"
+            f"Tier1 요약: {summary}\n"
             f"Tier1 영향도: {news.tier1_impact} / 방향: {news.tier1_direction}\n"
             f"Tier1 확신도: {news.tier1_confidence}\n\n"
             f"시장 컨텍스트:\n{ctx_str}"
         )
-        return {"system": system, "user": user}
+        return {"system": system, "user": _sanitize_for_api(user)}
 
     @staticmethod
     def _safe_parse_json(text: str) -> dict:
